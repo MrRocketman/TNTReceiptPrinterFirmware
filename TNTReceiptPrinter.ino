@@ -20,84 +20,88 @@
  * End Connection Command
  */
 
-/* Codes: P = Print F = Format V = Value
+#pragma mark - Communication Protocol Definition
+
+/* Codes: P = Print V = Value
  *
  * P00 VPassword - Authorize User (Returns "Authorized" if the password is corrct)
- * P01 VHello - Print Text (e.g. P02 VHello. "This is a quote." Now I'm done printing.)
- * P02 - Wakeup printer (This command takes 50ms to execute)
- * P03 - Sleep printer
- * P04 - Take printer online
- * P05 - Take printer offline. Print commands sent after this will be ignored until P03 is called
- * P06 VNewPassword - Change the password
- * P07 VNetworkName - Change the network name
- * P08 VWidth SHeight - Start printing bitmap. With width and height. Expects the appropiate amount of hex values and then a P09.
- * P09 VHex - Bitmap value
- * P10 - End printing bitmap
- * P11 - Print default bitmap
- * P12 - Open Cash Drawer
- * P97 - Restore printer settings to default
- * P98 - Restore everything to defaults and reset
- * P99 - Reset Printer
+ * P01 VNewPassword - Change the password
  *
- * F00 - All settings to default
- * F01 V0 - Inverse (Value codes: 0 = Off, 1 = On, F = Off, T = On)
- * F02 V0 - UpsideDown (Value codes: 0 = Off, 1 = On, F = Off, T = On)
- * F03 V0 - Double Height (Value codes: 0 = Off, 1 = On, F = Off, T = On)
- * F04 V0 - Double Width (Value codes: 0 = Off, 1 = On, F = Off, T = On)
- * F05 V0 - Strike (Value codes: 0 = Off, 1 = On, F = Off, T = On)
- * F06 V0 - Set Bold (Value codes: 0 = Off, 1 = On, F = Off, T = On)
- * F07 VL - Justify (Value codes: L = Left, C = Center, R = Right)
- * F08 V5 - Line Feed (e.g. F16 V5 Feeds 5 lines)
- * F09 V3 - Pixel Feed (e.g. F17 V3 Feeds 3 rows of pixels)
- * F10 VS - Set printing size (line spacing??) (Value codes: S = Small, M = Medium, L = Large)
- * F11 V0 - Underline (Value codes: 0 = Off, 1 = Normal Underline, 2 = Thick Underline)
- * F12 V0 - Set Character Spacing (Values Codes represent character spacing in pixels???)
- * F13 V32 - Set Line Height (Values codes represent line height in pixels. Default is 32)
- * F14 V1 - Add Tabs (Values codes represent the number of tabs to add)
+ * P10 - Open Cash Drawer
+ *
+ * P20 - Wakeup printer (This command takes 50ms to execute)
+ * P21 - Sleep printer
+ * P22 - Take printer online
+ * P23 - Take printer offline. Print commands sent after this will be ignored until P03 is called
+ * P24 - Restore printer settings to default
+ * P25 - Restore everything to defaults and reset
+ * P26 - Reset Printer
+ *
+ * P30 VHello - Print Text (e.g. P02 VHello. "This is a quote." Now I'm done printing.)
+ * P31 - Print default bitmap
+ *
+ * P40 - All settings to default
+ * P41 V0 - Inverse (Value codes: 0 = Off, 1 = On)
+ * P42 V0 - UpsideDown (Value codes: 0 = Off, 1 = On)
+ * P43 V0 - Double Height (Value codes: 0 = Off, 1 = On)
+ * P44 V0 - Double Width (Value codes: 0 = Off, 1 = On)
+ * P45 V0 - Strike (Value codes: 0 = Off, 1 = On)
+ * P46 V0 - Set Bold (Value codes: 0 = Off, 1 = On)
+ * P47 V1 - Justify (Value codes: 0 = Left, 1 = Center, 2 = Right)
+ * P48 V5 - Line Feed (e.g. F16 V5 Feeds 5 lines)
+ * P49 V3 - Pixel Feed (e.g. F17 V3 Feeds 3 rows of pixels)
+ * P50 V1 - Set printing size (line spacing??) (Value codes: 0 = Small, 1 = Medium, 2 = Large)
+ * P51 V0 - Underline (Value codes: 0 = Off, 1 = Normal Underline, 2 = Thick Underline)
+ * P52 V0 - Set Character Spacing (Values Codes represent character spacing in pixels???)
+ * P53 V32 - Set Line Height (Values codes represent line height in pixels. Default is 32)
+ * P54 V1 - Add Tabs (Values codes represent the number of tabs to add)
  */
-
-#pragma mark - Main Variables
-
-//The ASCII buffer for recieving from serial:
-#define MAX_COMMAND_SIZE 256
-#define BUFFER_SIZE 2
-#define DEFAULT_PASSWORD "James"
-#define VERSION_NUMBER 1
-#define EEPROM_ADDRESS 0
-#define DEBUG_PRINTING 0
-#define COMMAND_FINISHED_CHARACTER 5
 
 #include <SoftwareSerial.h>
 #include <Adafruit_Thermal.h>
 #include <EEPROM.h>
 #include "EEPROMAnything.h"
 #include "TheBitmap.h"
+#include <SPI.h>
+#include "Adafruit_BLE_UART.h"
+#include <iostream>
+#include <MemoryFree.h>
+#include <stdlib>
+
+#pragma mark - Variable Definitions
+
+//The ASCII buffer for recieving from serial:
+#define BUFFER_SIZE 40
+#define DEFAULT_PASSWORD "James"
+#define VERSION_NUMBER 1
+#define EEPROM_ADDRESS 0
+#define DEBUG_PRINTING // Comment out to disable
+#define EOL '\n'
+
+// BLE Definitions
+#define BLE_RDY 2 // BLE READY (data ready interrupt from BTLE)
+#define BLE_RST 9 // BLE RESET (resetting board on startup)
+#define BLE_REQ 10 // BLE REQ (SPI chip select)
+#define BLE_MOSI 11 // BLE MOSI (SPI MOSI)
+#define BLE_MISO 12 // BLE MISO (SPI MISO)
+#define BLE_CLK 13 // BLE CLK (SPI clock)
+//#define BTLEact 8 // BLE ACTIVE (lets host know BTLE is busy)
 
 // Pin definitions
-int cashDrawerPin = 7; // 7
-int printerRXPin = 6;  // this is the green wire // 6
-int printerTXPin = 5;  // this is the yellow wire // 5
-
-SoftwareSerial debug(debugRXPin, debugTXPin);
-Adafruit_Thermal printer(printerRXPin, printerTXPin);
+#define CASH_DRAWER_PIN 7 // This is the single yellow wire
+#define PRINTER_RX_PIN 6 // This is the green wire
+#define PRINTER_TX_PIN 5 // This is the yellow wire
 
 // EEPROM Variables
 int EEPROMAddress = 0;
 char *password;
 int versionNumber;
 
-boolean authorized = false;
+// Command buffer variables
+static char commandBuffer[BUFFER_SIZE];
+static int bufferIndex = 0;
 
-static char commandBuffer[BUFFER_SIZE][MAX_COMMAND_SIZE];
-static int bufferReadIndex = 0;
-static int bufferWriteIndex = 0;
-static int bufferLength = 0;
-static char serialCharacter;
-static int serialCount = 0;
-static boolean commentMode = false;
-static char *stringCharacterPointer; // just a pointer to find chars in the cmd string like X, Y, Z, E, etc
-long previousCommandMilliseconds = 0;
-
+// Bitmap printing variables
 int bitmapWidth = 0;
 int bitmapHeight = 0;
 uint8_t bitmapValue;
@@ -106,35 +110,34 @@ int bitmapRowIndex = 0;
 boolean printingBitmap = false;
 char hexString[2];
 
-// Methods
-void powerup();
-int freeRam();
-void printFreeRamToDebug();
-void printFreeRamToDebugAndWifly();
+// Variables for BTLE Communication
+bool authorized = 0;
+bool validCommandReceived = 0;
+bool firstTime = 1;
+aci_evt_opcode_t previousBLEStatus = ACI_EVT_DISCONNECTED;
+aci_evt_opcode_t currentBLEStatus = ACI_EVT_DISCONNECTED;
+Adafruit_BLE_UART BLEserial = Adafruit_BLE_UART(BLE_REQ, BLE_RDY, BLE_RST);
 
+Adafruit_Thermal printer(printerRXPin, printerTXPin);
+
+#pragma mark - Method Definitions
+
+//Data Handling
+void processCommand();
 void getCommand();
-void processCommands();
-void hexStringCodeValue();
-char * stringCodeValue();
-float floatCodeValue();
-int intCodeValue();
-bool codeSeen(char codeString[]);
-bool codeSeen(char code);
-void sendCommandFinished();
-void FlushSerialRequestResend();
-void ClearToSend();
+int parseCommandCode(char);
+char *parseCommandString(char code)
+void sendCommandToBLE(int dataCommand, int dataValue);
 
-bool stringIsTrueOrFalse(char *string);
-void endConnectionAndReset();
+// Debugging
 void terminal();
 
+// EEPROM
 void readEEPROMValues();
 void writeEEPROMDefaults();
 void writeEEPROMValues();
 
-void convertHexCharacters(char *commandValues, int length);
-
-#pragma mark - WiFly and Main Code
+#pragma mark - Setup
 
 // Code Start
 void setup()
@@ -144,449 +147,518 @@ void setup()
     digitalWrite(statusPin, LOW);
     
     // Serial setup
-    Serial.begin(9600); // This is the wifly Serial
-    
-    powerup();
-}
-
-void powerup()
-{
-    printFreeRamToDebug();
-    
-    // Init the BLE module here
-
+    Serial.begin(9600);
+    // BLE setup
+    BLEserial.begin();
     // Read password form EEPROM
     readEEPROMValues();
-    
     // Printer powerup and setup
     printer.begin();
-}
-
-int freeRam() 
-{
-    extern int __heap_start, *__brkval;
-    int v;
-    return (int) &v - (__brkval == 0 ? (int) &__heap_start : (int) __brkval);
-}
-
-void printFreeRam()
-{
-    Serial.print(F("RAM:"));
-    Serial.println(freeRam());
+    
+#ifdef DEBUG_PRINTING
+    Serial.print(F("freeRam: "));
+    Serial.print(freeMemory());
+    Serial.println(F(" bytes"));
+#endif
 }
 
 void loop()
 {
-    if(bufferLength < (BUFFER_SIZE - 1))
-        getCommand();
+    // Tell BLE to go to work (needs to happen frequently)
+    BLEserial.pollACI();
     
-    if(bufferLength)
+    //get current status of BTLE
+    currentBLEStatus = BLEserial.getState();
+    
+    // BLE Status change
+    if (currentBLEStatus != previousBLEStatus)
     {
-        processCommands();
+#ifdef DEBUG_PRINTING
+        if (currentBLEStatus == ACI_EVT_DEVICE_STARTED)
+        {
+            Serial.println(F("* Advertising started"));
+        }
+        if (currentBLEStatus == ACI_EVT_CONNECTED)
+        {
+            Serial.println(F("* Connected!"));
+        }
+        if (currentBLEStatus == ACI_EVT_DISCONNECTED)
+        {
+            Serial.println(F("* Disconnected or advertising timed out"));
+        }
+#endif
         
-        bufferLength = (bufferLength - 1);
-        bufferReadIndex = (bufferReadIndex + 1) % BUFFER_SIZE;
+        // Handle disconnections
+        if((currentBLEStatus == ACI_EVT_DEVICE_STARTED || currentBLEStatus == ACI_EVT_DISCONNECTED) && previousBLEStatus == ACI_EVT_CONNECTED)
+        {
+            authorized = 0;
+            firstTime = 1;
+        }
+        
+        previousBLEStatus = currentBLEStatus;
+    }
+    
+    // BLE connected, get commands if any
+    if (currentBTLEStatus == ACI_EVT_CONNECTED)
+    {
+        // start getting commands since BLE is connected
+        getCommand();
     }
 }
 
+#pragma mark - Data Handling
+
 void processCommands()
 {
-    int codeNumber; //throw away variable
-    char *codeCharacters;
-    int vValue = 0;
-    bool foundCommand = true;
-    
-    if(codeSeen('P'))
+    if(authorized)
     {
-        codeNumber = intCodeValue();
-        if(DEBUG_PRINTING)
+#ifdef DEBUG_PRINTING
+        Serial.print(F("cmdBuffer:"));
+        Serial.println(cmdBuffer);
+#endif
+        
+        // Determine which command was received
+        switch(parseCommandCode('P'))
         {
-            Serial.println("");
-            Serial.print(F("P"));
-            Serial.println(codeNumber);
+            case 0: // P00 Password authentication
+                validCommandReceived = 1;
+                
+                char *passwordAttempt = parseCommandString('V');
+                if(strcmp(password, passwordAttempt) == 0)
+                {
+                    authorized = 1;
+                }
+#ifdef DEBUG_PRINTING
+                Serial.print(F("Password attempt:"));
+                Serial.println(passwordAttempt);
+#endif
+                break;
+            case 1: // P01 VNewPassword - Change the password
+                validCommandReceived = 1;
+                
+                password = parseCommandString('V');
+                writeEEPROMValues();
+                break;
+            case 10: // P10 - Open Cash Drawer
+                validCommandReceived = 1;
+                
+#ifdef DEBUG_PRINTING
+                Serial.print(F("Open Cash Drawer:"));
+                Serial.println(password);
+#endif
+                
+                digitalWrite(cashDrawerPin, HIGH);
+                // Wait 50 ms to ensure the solenoid has been energized
+                delay(50);
+                digitalWrite(cashDrawerPin, LOW);
+                delay(50);
+                break;
+            case 20: // P20 Wakeup Printer
+                validCommandReceived = 1;
+                
+                printer.wake();
+                break;
+            case 21: // P21 Sleep Printer
+                validCommandReceived = 1;
+                
+                printer.sleep();
+                break;
+            case 22: // P22 Take Printer Online
+                validCommandReceived = 1;
+                
+                printer.online();
+                break;
+            case 23: // P23 Take Printer Offline
+                validCommandReceived = 1;
+                
+                printer.offline();
+                break;
+            case 24: // P24 Restore printer settings to default
+                validCommandReceived = 1;
+                
+                printer.setDefault();
+                break;
+            case 25: // P25 Restore EEPROM defaults and reset
+                validCommandReceived = 1;
+                
+                writeEEPROMDefaults();
+                printer.setDefault();
+                
+                printer.begin();
+                break;
+            case 26: // P26 Reset Printer
+                printer.reset();
+                break;
+            case 30: // P30 Print text
+                validCommandReceived = 1;
+                
+                char *textToPrint = parseCommandString('V');
+                
+#ifdef DEBUG_PRINTING
+                Serial.print(F("Printing text:"));
+                Serial.println(textToPrint);
+#endif
+                
+                printer.print(textToPrint);
+                break;
+            case 31: // P31 - Print default bitmap
+                validCommandReceived = 1;
+                
+                printer.printBitmap(TheBitmapWidth, TheBitmapHeight, TheBitmap);
+                break;
+            case 40: // P40 - All settings to default
+                validCommandReceived = 1;
+                
+                printer.setDefault();
+                break;
+            case 41: // P41 V0 - Inverse (Value codes: 0 = Off, 1 = On)
+                if(parseCommandCode('V') == 0)
+                {
+                    validCommandReceived = 1;
+                    printer.inverseOff();
+                }
+                else if(parseCommandCode('V') == 1)
+                {
+                    validCommandReceived = 1;
+                    printer.inverseOn();
+                }
+                break;
+            case 42: // P42 V0 - UpsideDown (Value codes: 0 = Off, 1 = On)
+                if(parseCommandCode('V') == 0)
+                {
+                    validCommandReceived = 1;
+                    printer.upsideDownOff();
+                }
+                else if(parseCommandCode('V') == 1)
+                {
+                    validCommandReceived = 1;
+                    printer.upsideDownOn();
+                }
+                break;
+            case 43: // P43 V0 - Double Height (Value codes: 0 = Off, 1 = On)
+                if(parseCommandCode('V') == 0)
+                {
+                    validCommandReceived = 1;
+                    printer.doubleHeightOff()();
+                }
+                else if(parseCommandCode('V') == 1)
+                {
+                    validCommandReceived = 1;
+                    printer.doubleHeightOn();
+                }
+                break;
+            case 44: //  P44 V0 - Double Width (Value codes: 0 = Off, 1 = On)
+                if(parseCommandCode('V') == 0)
+                {
+                    validCommandReceived = 1;
+                    printer.doubleWidthOff();
+                }
+                else if(parseCommandCode('V') == 1)
+                {
+                    validCommandReceived = 1;
+                    printer.doubleWidthOn();
+                }
+                break;
+            case 45: // P45 V0 - Strike (Value codes: 0 = Off, 1 = On)
+                if(parseCommandCode('V') == 0)
+                {
+                    validCommandReceived = 1;
+                    printer.strikeOff();
+                }
+                else if(parseCommandCode('V') == 1)
+                {
+                    validCommandReceived = 1;
+                    printer.strikeOn();
+                }
+                break;
+            case 46: // P46 V0 - Set Bold (Value codes: 0 = Off, 1 = On)
+                if(parseCommandCode('V') == 0)
+                {
+                    validCommandReceived = 1;
+                    printer.boldOff();
+                }
+                else if(parseCommandCode('V') == 1)
+                {
+                    validCommandReceived = 1;
+                    printer.boldOn();
+                }
+                break;
+            case 47: // P47 V1 - Justify (Value codes: 0 = Left, 1 = Center, 2 = Right)
+                if(parseCommandCode('V') == 0)
+                {
+                    validCommandReceived = 1;
+                    printer.justify('L');
+                }
+                else if(parseCommandCode('V') == 1)
+                {
+                    validCommandReceived = 1;
+                    printer.justify('C');
+                }
+                else if(parseCommandCode('V') == 2)
+                {
+                    validCommandReceived = 1;
+                    printer.justify('R');
+                }
+                break;
+            case 48: // P48 V5 - Line Feed (e.g. F16 V5 Feeds 5 lines)
+                validCommandReceived = 1;
+                
+                printer.feed(parseCommandCode('V'));
+                break;
+            case 49: // P49 V3 - Pixel Feed (e.g. F17 V3 Feeds 3 rows of pixels)
+                validCommandReceived = 1;
+                
+                printer.feedRows(parseCommandCode('V'));
+                break;
+            case 50: // P50 V1 - Set printing size (Value codes: 0 = Small, 1 = Medium, 2 = Large)
+                if(parseCommandCode('V') == 0)
+                {
+                    validCommandReceived = 1;
+                    printer.setSize('S');
+                }
+                else if(parseCommandCode('V') == 1)
+                {
+                    validCommandReceived = 1;
+                    printer.setSize('M');
+                }
+                else if(parseCommandCode('V') == 2)
+                {
+                    validCommandReceived = 1;
+                    printer.setSize('L');
+                }
+                break;
+            case 51: // P51 V0 - Underline (Value codes: 0 = Off, 1 = Normal Underline, 2 = Thick Underline)
+                validCommandReceived = 1;
+                
+                printer.underlineOn(parseCommandCode('V'));
+                break;
+            case 52: // P52 V0 - Set Character Spacing (Values Codes represent character spacing in pixels???)
+                validCommandReceived = 1;
+                
+                printer.setCharSpacing(parseCommandCode('V'));
+                break;
+            case 53: // P53 V32 - Set Line Height (Values codes represent line height in pixels. Default is 32)
+                validCommandReceived = 1;
+                
+                printer.setLineHeight(parseCommandCode('V'));
+                break;
+            case 54: // P54 V1 - Add Tabs (Values codes represent the number of tabs to add)
+                validCommandReceived = 1;
+                
+                int numberOfTabs = parseCommandCode('V');
+                
+                for(; numberOfTabs > 0; numberOfTabs --)
+                    printer.tab();
+                break;
+            default:
+                validCommandReceived = 0;
+                break;
         }
         
-        if(authorized || codeNumber == 0)
+        if (validCommandReceived)
         {
-            switch(codeNumber)
-            {
-                case 0: // P00 Password authentication
-                    char *passwordAttempt;
-                    if(codeSeen('V'))
-                        passwordAttempt = stringCodeValue();
-                    
-                    if(DEBUG_PRINTING)
-                    {
-                        Serial.print(F("Password:"));
-                        Serial.println(password);
-                        Serial.print(F("Password attempt:"));
-                        Serial.println(passwordAttempt);
-                    }
-                    
-                    // Check the password
-                    if(strcmp(password, passwordAttempt) == 0)
-                    {
-                        authorized = true;
-                        //wiflyPrintln(PSTR("Authorized"));
-                    }
-                    break;
-                case 1: // P01 Print text
-                    char *textToPrint;
-                    if(codeSeen('V'))
-                        textToPrint = stringCodeValue();
-                    
-                    if(DEBUG_PRINTING)
-                    {
-                        Serial.print(F("Printing text:"));
-                        Serial.println(textToPrint);
-                    }
-                    
-                    printer.print(textToPrint);
-                    break;
-                case 2: // P02 Wakeup Printer
-                    printer.wake();
-                    break;
-                case 3: // P03 Sleep Printer
-                    printer.sleep();
-                    break;
-                case 4: // P04 Take Printer Online
-                    printer.online();
-                    break;
-                case 5: // P05 Take Printer Offline
-                    printer.offline();
-                    break;
-                case 6: // P06 VNewPassword - Change the password
-                    if(codeSeen('V'))
-                        password = stringCodeValue();
-                    
-                    writeEEPROMValues();
-                    break;
-                case 7: // P07 VNetworkName - Change the network name
-                    
-                    break;
-                case 8: // P08 VWidth SHeight - Start printing bitmap. With width and height. Expects the appropiate amount of hex values and then a P09.
-                    if(codeSeen('V'))
-                        bitmapWidth = intCodeValue();
-                    if(codeSeen('S'))
-                        bitmapHeight = intCodeValue();
-                    
-                    printingBitmap = true;
-                    /*
-                    // Maximum width of the printer
-                    if (bitmapWidth > 384) 
-                        break;
-                    
-                    printer.write(18);
-                    printer.write(42);
-                    printer.write((int)(bitmapWidth / 8.0 * bitmapHeight / 16.0));
-                    printer.write((int)(bitmapWidth / 8));*/
-                    break;
-                case 9: // P09 VFF - Bitmap value
-                    if(printingBitmap)
-                    {
-                        for(int i = 0; i < (int)(bitmapWidth / 8.0); i ++)
-                        {
-                            bitmapValue = 0;
-                            if(codeSeen('V'))
-                            {
-                                hexStringCodeValue();
-                                if(DEBUG_PRINTING)
-                                {
-                                    Serial.print(F("Hex:"));
-                                    Serial.print(hexString);
-                                }
-                                convertHexCharacters(hexString, 2);
-                                bitmapValue |= (hexString[0] << 4);
-                                bitmapValue |= (hexString[1] << 0);
-                            }
-                            
-                            bitmapRow[bitmapRowIndex++] = bitmapValue;
-//                            printer.write(bitmapValue);
-                        }
-                        
-                        printer.printBitmapRowFromSRAM(bitmapWidth, bitmapRow);
-                        bitmapRowIndex = 0;
-                    }
-                    break;
-                case 10: // P10 - End printing bitmap
-//                    delay(500);
-                    printingBitmap = false;
-                    break;
-                case 11: // P11 - Print default bitmap
-                    printer.printBitmap(TheBitmapWidth, TheBitmapHeight, TheBitmap);
-                    break;
-                case 12: // P12 - Open Cash Drawer
-                    if(DEBUG_PRINTING)
-                    {
-                        Serial.print(F("Open Cash Drawer:"));
-                        Serial.println(password);
-                    }
-                    digitalWrite(cashDrawerPin, HIGH);
-                    // Wait 50 ms to ensure the solenoid has been energized
-                    delay(50);
-                    digitalWrite(cashDrawerPin, LOW);
-                    delay(50);
-                    break;
-                case 97: // P97 Restore printer settings to default
-                    printer.setDefault();
-                    break;
-                case 98: // P98 Restore EEPROM defaults and reset
-                    writeEEPROMDefaults();
-                    printer.setDefault();
-                    
-                    printer.begin();
-                    break;
-                case 99: // P99 Reset Printer
-                    printer.reset();
-                    break;
-                default:
-                    foundCommand = false;
-                    break;
-            }
+            BLEserial.print("AOK\n");
         }
         else
         {
-            //wiflyPrintln(PSTR("Not Authorized!"));
-        }
-    }
-    else if(codeSeen('F'))
-    {
-        codeNumber = intCodeValue();
-        if(DEBUG_PRINTING)
-        {
-            Serial.println("");
-            Serial.print(F("F"));
-            Serial.println(codeNumber);
-        }
-        
-        if(authorized)
-        {
-            switch(codeNumber) 
-            {
-                case 0: // F00 - All settings to default
-                    printer.setDefault();
-                    break;
-                case 1: // F01 V0 - Inverse (Value codes: 0 = Off, 1 = On, F = Off, T = On)
-                    if(codeSeen('V')) 
-                        codeCharacters = stringCodeValue();
-                    
-                    if(stringIsTrueOrFalse(codeCharacters))
-                        printer.inverseOn();
-                    else
-                        printer.inverseOff();
-                    break;
-                case 2: // F02 V0 - UpsideDown (Value codes: 0 = Off, 1 = On, F = Off, T = On)
-                    if(codeSeen('V')) 
-                        codeCharacters = stringCodeValue();
-                    
-                    if(stringIsTrueOrFalse(codeCharacters))
-                        printer.upsideDownOn();
-                    else
-                        printer.upsideDownOff();
-                    break;
-                case 3: // F03 V0 - Double Height (Value codes: 0 = Off, 1 = On, F = Off, T = On)
-                    if(codeSeen('V')) 
-                        codeCharacters = stringCodeValue();
-                    
-                    if(stringIsTrueOrFalse(codeCharacters))
-                        printer.doubleHeightOn();
-                    else
-                        printer.doubleHeightOff();
-                    break;
-                case 4: //  F04 V0 - Double Width (Value codes: 0 = Off, 1 = On, F = Off, T = On)
-                    if(codeSeen('V')) 
-                        codeCharacters = stringCodeValue();
-                    
-                    if(stringIsTrueOrFalse(codeCharacters))
-                        printer.doubleWidthOn();
-                    else
-                        printer.doubleWidthOff();
-                    break;
-                case 5: // F05 V0 - Strike (Value codes: 0 = Off, 1 = On, F = Off, T = On)
-                    if(codeSeen('V')) 
-                        codeCharacters = stringCodeValue();
-                    
-                    if(stringIsTrueOrFalse(codeCharacters))
-                        printer.strikeOn();
-                    else
-                        printer.strikeOff();
-                    break;
-                case 6: // F06 V0 - Set Bold (Value codes: 0 = Off, 1 = On, F = Off, T = On)
-                    if(codeSeen('V')) 
-                        codeCharacters = stringCodeValue();
-                    
-                    if(stringIsTrueOrFalse(codeCharacters))
-                        printer.boldOn();
-                    else
-                        printer.boldOff();
-                    break;
-                case 7: // F07 VL - Justify (Value codes: L = Left, C = Center, R = Right)
-                    if(codeSeen('V')) 
-                        codeCharacters = stringCodeValue();
-                    
-                        printer.justify(codeCharacters[0]);
-                    break;
-                case 8: // F08 V5 - Line Feed (e.g. F16 V5 Feeds 5 lines)
-                    if(codeSeen('V')) 
-                        vValue = intCodeValue();
-                    
-                    printer.feed(vValue);
-                    break;
-                case 9: // F09 V3 - Pixel Feed (e.g. F17 V3 Feeds 3 rows of pixels)
-                    if(codeSeen('V')) 
-                        vValue = intCodeValue();
-                    
-                    printer.feedRows(vValue);
-                    break;
-                case 10: // F10 VS - Set printing size (Value codes: S = Small, M = Medium, L = Large)
-                    if(codeSeen('V')) 
-                        codeCharacters = stringCodeValue();
-                    
-                    debug.println(codeCharacters[0]);
-                    printer.setSize(codeCharacters[0]);
-                    break;
-                case 11: // F11 V0 - Underline (Value codes: 0 = Off, 1 = Normal Underline, 2 = Thick Underline)
-                    if(codeSeen('V')) 
-                        codeNumber = intCodeValue();
-                    
-                    printer.underlineOn(codeNumber);
-                    break;
-                case 12: // F12 V0 - Set Character Spacing (Values Codes represent character spacing in pixels???)
-                    if(codeSeen('V')) 
-                        vValue = intCodeValue();
-                    
-                    printer.setCharSpacing(vValue);
-                    break;
-                case 13: // F13 V32 - Set Line Height (Values codes represent line height in pixels. Default is 32)
-                    if(codeSeen('V')) 
-                        vValue = intCodeValue();
-                    
-                    printer.setLineHeight(vValue);
-                    break;
-                case 14: // F14 V1 - Add Tabs (Values codes represent the number of tabs to add)
-                    if(codeSeen('V')) 
-                        vValue = intCodeValue();
-                    
-                    for(; vValue > 0; vValue --)
-                        printer.tab();
-                    break;
-                default:
-                    foundCommand = false;
-                    break;
-            }
-        }
-        else
-        {
-            //wiflyPrintln(PSTR("Not Authorized!"));
+            BLEserial.print("NOK\n");
         }
     }
     else
     {
-        // Error
-        //wiflyPrintln(PSTR("Invalild Command Code!"));
-        foundCommand = false;
+        if (firstTime)
+        {
+            if (parseNumber('P') == 123)
+            {
+                authorized = 1;
+                firstTime = 0;
+                BLEserial.print("Authorized\n");
+            }
+            else
+            {
+                authorized = 0;
+            }
+        }
+        
+        if(!iOSVerified)
+        {
+            BTLEserial.print("Not Authorized\n");
+        }
     }
-    
-    if(foundCommand)
-        sendCommandFinished();
-    
-    ClearToSend();
 }
 
-void getCommand() 
-{ 
-  // if wifly.availible then we did have a connection but it has now been closed
-    /*while(wifly.available() > 0  && bufferLength < BUFFER_SIZE)
+void getCommand()
+{
+#ifdef DEBUG_PRINTING
+    if (BLEserial.available())
     {
-        serialCharacter = wifly.read();
-        // If end of 1 command line
-        if(serialCharacter == '\n' || serialCharacter == '\r' || serialCount >= (MAX_COMMAND_SIZE - 1)) 
+        Serial.print(F("* "));
+        Serial.print(BTLEserial.available());
+        Serial.println(F(" bytes available from BTLE"));
+    }
+#endif
+    
+    // If data is available
+    while (BLEserial.available())
+    {
+        // Receive one character from BLE
+        char c = BLEserial.read();
+        
+        // As long as character is not EOL and is not exceeding buffer size limit
+        if (c != EOL && (bufferIndex < BUFFER_SIZE))
         {
-            // If empty line
-            if(!serialCount) 
-            { 
-                commentMode = false; //for new command
-                return;
-            }
-            commandBuffer[bufferWriteIndex][serialCount] = 0; //terminate string
-            
-            if(!commentMode)
-            {
-                commentMode = false; //for new command
-                
-                codeSeen('P');
-                codeSeen('F');
-                
-                bufferWriteIndex = (bufferWriteIndex + 1) % BUFFER_SIZE;
-                bufferLength += 1;
-            }
-            serialCount = 0; //clear buffer
+            // Store character in command buffer
+            commandBuffer[bufferIndex] = c;
+#ifdef DEBUG_PRINTING
+            // print received character (for debugging)
+            Serial.print(commandBuffer[bufferIndex]);
+#endif
+            // Increment command buffer index
+            bufferIndex ++;
         }
+        // Now that a full command has been received
         else
         {
-            if(serialCharacter == ';') 
-                commentMode = true;
-            if(!commentMode) 
-                commandBuffer[bufferWriteIndex][serialCount++] = serialCharacter;
+#ifdef DEBUG_PRINTING
+            Serial.print(F("\n"));
+#endif
+            processCommand();
+            //restart buffer
+            bufferIndex = 0;
+            memset(commandBuffer, '\0', bufferIndex);
         }
-    }*/
-}
-
-void hexStringCodeValue()
-{
-    // Copy the characters
-    for(int i = 0; i < 2; i ++)
-    {
-        hexString[i] = commandBuffer[bufferReadIndex][stringCharacterPointer - commandBuffer[bufferReadIndex] + 1 + i];
     }
-    // Erase the 'V' so the next one can be found
-    commandBuffer[bufferReadIndex][stringCharacterPointer - commandBuffer[bufferReadIndex]] = '0';
 }
 
-char * stringCodeValue()
+// Function to retrieve command code value
+int parseCommandCode(char code)
 {
-    return &commandBuffer[bufferReadIndex][stringCharacterPointer - commandBuffer[bufferReadIndex] + 1];
+    char *ptr = commandBuffer;
+    
+    while(ptr && *ptr && ptr < commandBuffer + bufferIndex)
+    {
+        if(*ptr == code)
+        {
+            return atoi(ptr + 1);
+        }
+        
+        ptr = strchr(ptr, ' ') + 1;
+    }
+    
+    return -1;
 }
 
-float floatCodeValue() 
-{ 
-    return (strtod(&commandBuffer[bufferReadIndex][stringCharacterPointer - commandBuffer[bufferReadIndex] + 1], NULL)); 
-}
-
-int intCodeValue() 
-{ 
-    return (int)(strtol(&commandBuffer[bufferReadIndex][stringCharacterPointer - commandBuffer[bufferReadIndex] + 1], NULL, 10)); 
-}
-
-// Return True if the string was found
-bool codeSeen(char codeString[])
-{ 
-    return (strstr(commandBuffer[bufferReadIndex], codeString) != NULL); 
-}  
-
-// Return True if the char was found
-bool codeSeen(char code)
+// Function to retrieve command string value
+char *parseCommandString(char code)
 {
-    stringCharacterPointer = strchr(commandBuffer[bufferReadIndex], code);
-    return (stringCharacterPointer != NULL);  //Return True if a character was found
+    char *ptr = commandBuffer;
+    
+    while(ptr && *ptr && ptr < commandBuffer + bufferIndex)
+    {
+        if(*ptr == code)
+        {
+            return ptr;
+        }
+        
+        ptr = strchr(ptr, ' ') + 1;
+    }
+    
+    return '\0';
 }
 
-void sendCommandFinished()
+// Function to prepare data and send via BTLE to iOS
+void sendCommandToBLE(int dataCommand, int dataValue)
 {
-    //wifly.write(COMMAND_FINISHED_CHARACTER);
-}
-
-void FlushSerialRequestResend()
-{
-    //char cmdbuffer[bufindr][100]="Resend:";
-    //wifly.flush();
-    ClearToSend();
-}
-
-void ClearToSend()
-{
-    previousCommandMilliseconds = millis();
-    //SERIAL_PROTOCOLLNPGM(MSG_OK); 
+    char tempBuffer[5];
+    char dataToSend[13];
+    
+    itoa(dataCommand, tempBuffer, 10);
+    dataToSend[0] = 'C';
+    
+    int sizeBuffer = strlen(tempBuffer);
+    
+    //**for debugging**
+    //Serial.println(sizeBuffer);
+    //**end of debugging
+    
+    for (int i = 0; i < sizeBuffer; i++)
+    {
+        dataToSend[i+1] = tempBuffer[i];
+    }
+    
+    //fill in empty spaces for command
+    if(sizeBuffer == 1)
+    {
+        dataToSend[2] = ' ';
+        dataToSend[3] = ' ';
+        dataToSend[4] = ' ';
+        dataToSend[5] = ' ';
+    }
+    else if(sizeBuffer == 2)
+    {
+        dataToSend[3] = ' ';
+        dataToSend[4] = ' ';
+        dataToSend[5] = ' ';
+    }
+    else if(sizeBuffer == 3)
+    {
+        dataToSend[4] = ' ';
+        dataToSend[5] = ' ';
+    }
+    else
+    {
+        dataToSend[5] = ' ';
+    }
+    
+    dataToSend[6] = 'D';
+    
+    itoa(dataValue, tempBuffer, 10);
+    sizeBuffer = strlen(tempBuffer);
+    //Serial.println(sizeBuffer);
+    
+    for (int i = 0; i < sizeBuffer; i++)
+    {
+        dataToSend[i+7] = tempBuffer[i];
+    }
+    
+    //fill in empty spaces for value
+    if(sizeBuffer == 1)
+    {
+        dataToSend[8] = ' ';
+        dataToSend[9] = ' ';
+        dataToSend[10] = ' ';
+    }
+    else if(sizeBuffer == 2)
+    {
+        dataToSend[9] = ' ';
+        dataToSend[10] = ' ';
+    }
+    else if(sizeBuffer == 3)
+    {
+        dataToSend[10] = ' ';
+    }
+    else
+    {
+        //max length for dataValue acheived, no need to fill in empty spaces
+    }
+    
+    dataToSend[11] = '\n';
+    dataToSend[12] = '\0';
+    
+    //for debugging**
+    Serial.print(F("sendDataBLE:"));
+    Serial.println(dataToSend);
+    
+    //tell BTLE to go to work (needs to happen frequently)
+    BTLEserial.pollACI();
+    //get current status of BTLE
+    currentBTLEStatus = BTLEserial.getState();
+    
+    //BTLE connected
+    if ((currentBTLEStatus == ACI_EVT_CONNECTED))
+    {
+        BTLEserial.print(dataToSend);
+    }
 }
 
 void terminal()
@@ -605,19 +677,7 @@ void terminal()
     }*/
 }
 
-bool stringIsTrueOrFalse(char *string)
-{
-    if(string[0] == '0' || string[0] == 'F' || string[0] == 'f')
-        return false;
-    else if(string[0] == '1' || string[0] == 'T' || string[0] == 't')
-        return true;
-}
-
-void endConnectionAndReset()
-{
-    wifly.close();
-    authorized = false;
-}
+#pragma mark - EEPROM Methods
 
 void readEEPROMValues()
 {
@@ -683,23 +743,4 @@ void writeEEPROMValues()
         EEPROM_writeAnything(&EEPROMAddress, versionNumber);
         EEPROM_writeAnything(&EEPROMAddress, password);
     }
-}
-
-void convertHexCharacters(char *commandValues, int length)
-{
-	short i;
-	// Only convert the hex characters to 0 - 15 from their ASCII Character values
-	for(i = 0; i < length; i ++)
-	{
-		// Convert upper case letters
-		if(commandValues[i] >= 'A' && commandValues[i] <= 'F')
-			commandValues[i] -= 55;
-		// Convert lower case letters
-		else if(commandValues[i] >= 'a' && commandValues[i] <= 'f')
-			commandValues[i] -= 87;
-		// Convert numbers
-		else if(commandValues[i] >= '0' && commandValues[i] <= '9')
-			commandValues[i] -= 48;
-		//printf("cvrt %c", commandValues[i]);
-	}
 }
