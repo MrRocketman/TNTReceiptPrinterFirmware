@@ -66,7 +66,7 @@
 #define VERSION_NUMBER 1
 #define EEPROM_ADDRESS 0
 #define DEBUG_TO_WIFLY 0
-#define DEBUG_TO_SERIAL 1
+#define DEBUG_TO_SERIAL 0
 #define COMMAND_FINISHED_CHARACTER 5
 
 #include <WiFlyHQ.h>
@@ -78,11 +78,11 @@
 
 // Pin definitions
 int statusPin = 13;
-int cashDrawerPin = 4; // 7
-int printerRXPin = 3;  // this is the green wire // 6
-int printerTXPin = 2;  // this is the yellow wire // 5
-int debugRXPin = 6;
-int debugTXPin = 5;
+int cashDrawerPin = 7; // 7
+int printerRXPin = 6;  // this is the green wire // 6
+int printerTXPin = 5;  // this is the yellow wire // 5
+int debugRXPin = 4;
+int debugTXPin = 3;
 
 WiFly wifly;
 SoftwareSerial debug(debugRXPin, debugTXPin);
