@@ -56,20 +56,17 @@
  * F14 V1 - Add Tabs (Values codes represent the number of tabs to add)
  */
 
-#pragma mark - WiFly and Main Variables
+#pragma mark - Main Variables
 
 //The ASCII buffer for recieving from serial:
 #define MAX_COMMAND_SIZE 256
 #define BUFFER_SIZE 2
 #define DEFAULT_PASSWORD "James"
-#define DEFAULT_AP_NETWORK_NAME "TNT Receipt_Printer"
 #define VERSION_NUMBER 1
 #define EEPROM_ADDRESS 0
-#define DEBUG_TO_WIFLY 0
-#define DEBUG_TO_SERIAL 0
+#define DEBUG_PRINTING 0
 #define COMMAND_FINISHED_CHARACTER 5
 
-#include <WiFlyHQ.h>
 #include <SoftwareSerial.h>
 #include <Adafruit_Thermal.h>
 #include <EEPROM.h>
@@ -77,14 +74,10 @@
 #include "TheBitmap.h"
 
 // Pin definitions
-int statusPin = 13;
 int cashDrawerPin = 7; // 7
 int printerRXPin = 6;  // this is the green wire // 6
 int printerTXPin = 5;  // this is the yellow wire // 5
-int debugRXPin = 4;
-int debugTXPin = 3;
 
-WiFly wifly;
 SoftwareSerial debug(debugRXPin, debugTXPin);
 Adafruit_Thermal printer(printerRXPin, printerTXPin);
 
@@ -92,9 +85,6 @@ Adafruit_Thermal printer(printerRXPin, printerTXPin);
 int EEPROMAddress = 0;
 char *password;
 int versionNumber;
-char *apNetworkName;
-char *joinNetorkName;
-char *joinNetworkPassword;
 
 boolean authorized = false;
 
@@ -142,11 +132,6 @@ void readEEPROMValues();
 void writeEEPROMDefaults();
 void writeEEPROMValues();
 
-void debugPrint(PGM_P s);
-void debugPrintln(PGM_P s);
-void wiflyPrint(PGM_P s);
-void wiflyPrintln(PGM_P s);
-
 void convertHexCharacters(char *commandValues, int length);
 
 #pragma mark - WiFly and Main Code
@@ -154,17 +139,12 @@ void convertHexCharacters(char *commandValues, int length);
 // Code Start
 void setup()
 {
-    // Blinky Light
-    pinMode(statusPin, OUTPUT);
-    digitalWrite(statusPin, LOW);
     // Cash Drawer
     pinMode(cashDrawerPin, OUTPUT);
     digitalWrite(statusPin, LOW);
     
     // Serial setup
     Serial.begin(9600); // This is the wifly Serial
-    debug.begin(19200);
-    //printer.begin(19200);
     
     powerup();
 }
@@ -173,73 +153,13 @@ void powerup()
 {
     printFreeRamToDebug();
     
-    // DO NOT PRINT ANYTHING TO WIFLY BEFORE IT IS BOOTED UP ELSE MAYHEM ENSUES! Don't do anything before it powers up for that matter
-    
-    // WiFly powerup
-    if(!wifly.begin(&Serial, &debug)) 
-    {
-        if(DEBUG_TO_SERIAL)
-            debugPrintln(PSTR("WiFly Power up FAILED!"));
-            
-            if(DEBUG_TO_SERIAL)
-                debugPrintln(PSTR("AP Network Creation FAILED!"));
-            
-            // Blink light to show ap Network Created failure
-            for(int i = 0; i < 3; i ++)
-            {
-                digitalWrite(statusPin, HIGH);
-                delay(100);
-                digitalWrite(statusPin, LOW);
-                delay(100);
-            }
-        
-        digitalWrite(statusPin, LOW);
-    }
-    // Wifly AP Network Creation/Network Joining. EEPROM Reading.
-    else
-    {
-        if(DEBUG_TO_SERIAL)
-            debugPrintln(PSTR("WiFly Powered up"));
-            
-        if(DEBUG_TO_SERIAL)
-                debugPrintln(PSTR("AP Network Created"));
-            
-            digitalWrite(statusPin, HIGH);
-            wifly.setIpProtocol(WIFLY_PROTOCOL_TCP);
-        
-        // Read password form EEPROM
-        readEEPROMValues();
-        
-        // AP Network Creation Success
-        /*if(wifly.createSoftAPNetwork(apNetworkName, 8))
-        {
-            if(DEBUG_TO_SERIAL)
-                debugPrintln(PSTR("AP Network Created"));
-            
-            digitalWrite(statusPin, HIGH);
-            wifly.setIpProtocol(WIFLY_PROTOCOL_TCP);
-        }
-        // AP Network Creation Failed
-        else
-        {
-            if(DEBUG_TO_SERIAL)
-                debugPrintln(PSTR("AP Network Creation FAILED!"));
-            
-            // Blink light to show ap Network Created failure
-            for(int i = 0; i < 3; i ++)
-            {
-                digitalWrite(statusPin, HIGH);
-                delay(100);
-                digitalWrite(statusPin, LOW);
-                delay(100);
-            }
-        }*/
-    }
+    // Init the BLE module here
+
+    // Read password form EEPROM
+    readEEPROMValues();
     
     // Printer powerup and setup
     printer.begin();
-    
-    printFreeRamToDebugAndWifly();
 }
 
 int freeRam() 
@@ -249,29 +169,10 @@ int freeRam()
     return (int) &v - (__brkval == 0 ? (int) &__heap_start : (int) __brkval);
 }
 
-void printFreeRamToDebug()
+void printFreeRam()
 {
-    if(DEBUG_TO_SERIAL)
-    {
-        debugPrint(PSTR("RAM:"));
-        debug.println(freeRam());
-    }
-}
-
-void printFreeRamToDebugAndWifly()
-{
-    int sram = freeRam();
-    
-    if(DEBUG_TO_SERIAL)
-    {
-        debugPrint(PSTR("RAM:"));
-        debug.println(sram);
-    }
-    if(DEBUG_TO_WIFLY)
-    {
-        wiflyPrint(PSTR("RAM:"));
-        wifly.println(sram);
-    }
+    Serial.print(F("RAM:"));
+    Serial.println(freeRam());
 }
 
 void loop()
@@ -298,17 +199,11 @@ void processCommands()
     if(codeSeen('P'))
     {
         codeNumber = intCodeValue();
-        if(DEBUG_TO_WIFLY)
+        if(DEBUG_PRINTING)
         {
-            wifly.println();
-            wifly.write('P');
-            wifly.println(codeNumber);
-        }
-        if(DEBUG_TO_SERIAL)
-        {
-            debug.println();
-            debug.write('P');
-            debug.println(codeNumber);
+            Serial.println("");
+            Serial.print(F("P"));
+            Serial.println(codeNumber);
         }
         
         if(authorized || codeNumber == 0)
@@ -320,26 +215,19 @@ void processCommands()
                     if(codeSeen('V'))
                         passwordAttempt = stringCodeValue();
                     
-                    if(DEBUG_TO_WIFLY)
+                    if(DEBUG_PRINTING)
                     {
-                        wiflyPrint(PSTR("Password:"));
-                        wifly.println(password);
-                        wiflyPrint(PSTR("Password attempt:"));
-                        wifly.println(passwordAttempt);
-                    }
-                    if(DEBUG_TO_SERIAL)
-                    {
-                        debugPrint(PSTR("Password:"));
-                        debug.println(password);
-                        debugPrint(PSTR("Password attempt:"));
-                        debug.println(passwordAttempt);
+                        Serial.print(F("Password:"));
+                        Serial.println(password);
+                        Serial.print(F("Password attempt:"));
+                        Serial.println(passwordAttempt);
                     }
                     
                     // Check the password
                     if(strcmp(password, passwordAttempt) == 0)
                     {
                         authorized = true;
-                        wiflyPrintln(PSTR("Authorized"));
+                        //wiflyPrintln(PSTR("Authorized"));
                     }
                     break;
                 case 1: // P01 Print text
@@ -347,15 +235,10 @@ void processCommands()
                     if(codeSeen('V'))
                         textToPrint = stringCodeValue();
                     
-                    if(DEBUG_TO_WIFLY)
+                    if(DEBUG_PRINTING)
                     {
-                        wiflyPrint(PSTR("Printing text:"));
-                        wifly.println(textToPrint);
-                    }
-                    if(DEBUG_TO_SERIAL)
-                    {
-                        debugPrint(PSTR("Printing text:"));
-                        debug.println(textToPrint);
+                        Serial.print(F("Printing text:"));
+                        Serial.println(textToPrint);
                     }
                     
                     printer.print(textToPrint);
@@ -379,12 +262,7 @@ void processCommands()
                     writeEEPROMValues();
                     break;
                 case 7: // P07 VNetworkName - Change the network name
-                    char *newAPNetworkName;
-                    if(codeSeen('V'))
-                        newAPNetworkName = stringCodeValue();
                     
-                    strcpy(apNetworkName, newAPNetworkName);
-                    writeEEPROMValues();
                     break;
                 case 8: // P08 VWidth SHeight - Start printing bitmap. With width and height. Expects the appropiate amount of hex values and then a P09.
                     if(codeSeen('V'))
@@ -412,10 +290,10 @@ void processCommands()
                             if(codeSeen('V'))
                             {
                                 hexStringCodeValue();
-                                if(DEBUG_TO_SERIAL)
+                                if(DEBUG_PRINTING)
                                 {
-                                    debugPrint(PSTR("Hex:"));
-                                    debug.println(hexString);
+                                    Serial.print(F("Hex:"));
+                                    Serial.print(hexString);
                                 }
                                 convertHexCharacters(hexString, 2);
                                 bitmapValue |= (hexString[0] << 4);
@@ -438,10 +316,10 @@ void processCommands()
                     printer.printBitmap(TheBitmapWidth, TheBitmapHeight, TheBitmap);
                     break;
                 case 12: // P12 - Open Cash Drawer
-                    if(DEBUG_TO_SERIAL)
+                    if(DEBUG_PRINTING)
                     {
-                        debugPrint(PSTR("Open Cash Drawer:"));
-                        debug.println(password);
+                        Serial.print(F("Open Cash Drawer:"));
+                        Serial.println(password);
                     }
                     digitalWrite(cashDrawerPin, HIGH);
                     // Wait 50 ms to ensure the solenoid has been energized
@@ -468,23 +346,17 @@ void processCommands()
         }
         else
         {
-            wiflyPrintln(PSTR("Not Authorized!"));
+            //wiflyPrintln(PSTR("Not Authorized!"));
         }
     }
     else if(codeSeen('F'))
     {
         codeNumber = intCodeValue();
-        if(DEBUG_TO_WIFLY)
+        if(DEBUG_PRINTING)
         {
-            wifly.println();
-            wifly.write('F');
-            wifly.println(codeNumber);
-        }
-        if(DEBUG_TO_SERIAL)
-        {
-            debug.println();
-            debug.write('F');
-            debug.println(codeNumber);
+            Serial.println("");
+            Serial.print(F("F"));
+            Serial.println(codeNumber);
         }
         
         if(authorized)
@@ -605,13 +477,13 @@ void processCommands()
         }
         else
         {
-            wiflyPrintln(PSTR("Not Authorized!"));
+            //wiflyPrintln(PSTR("Not Authorized!"));
         }
     }
     else
     {
         // Error
-        wiflyPrintln(PSTR("Invalild Command Code!"));
+        //wiflyPrintln(PSTR("Invalild Command Code!"));
         foundCommand = false;
     }
     
@@ -624,7 +496,7 @@ void processCommands()
 void getCommand() 
 { 
   // if wifly.availible then we did have a connection but it has now been closed
-    while(wifly.available() > 0  && bufferLength < BUFFER_SIZE) 
+    /*while(wifly.available() > 0  && bufferLength < BUFFER_SIZE)
     {
         serialCharacter = wifly.read();
         // If end of 1 command line
@@ -657,7 +529,7 @@ void getCommand()
             if(!commentMode) 
                 commandBuffer[bufferWriteIndex][serialCount++] = serialCharacter;
         }
-    }
+    }*/
 }
 
 void hexStringCodeValue()
@@ -701,14 +573,13 @@ bool codeSeen(char code)
 
 void sendCommandFinished()
 {
-    wifly.write(COMMAND_FINISHED_CHARACTER);
-    debug.println(COMMAND_FINISHED_CHARACTER);
+    //wifly.write(COMMAND_FINISHED_CHARACTER);
 }
 
 void FlushSerialRequestResend()
 {
     //char cmdbuffer[bufindr][100]="Resend:";
-    wifly.flush();
+    //wifly.flush();
     ClearToSend();
 }
 
@@ -720,7 +591,7 @@ void ClearToSend()
 
 void terminal()
 {
-    if(wifly.available())
+    /*if(wifly.available())
     {
         char c = wifly.read();
         debug.write(c);
@@ -731,7 +602,7 @@ void terminal()
     if(debug.available())
     {
         wifly.write(debug.read());
-    }
+    }*/
 }
 
 bool stringIsTrueOrFalse(char *string)
@@ -753,10 +624,10 @@ void readEEPROMValues()
     EEPROMAddress = EEPROM_ADDRESS;
     EEPROM_readAnything(&EEPROMAddress, versionNumber);
     
-    if(DEBUG_TO_SERIAL)
+    if(DEBUG_PRINTING)
     {
-        debugPrint(PSTR("EEPROM versionNumber:"));
-        debug.println(versionNumber);
+        Serial.print(F("EEPROM versionNumber:"));
+        Serial.println(versionNumber);
     }
     
     // First powerup. Write defaults to EEPROM
@@ -768,32 +639,29 @@ void readEEPROMValues()
     // Version 1.0 Values/Order
     if(versionNumber <= 1)
     {
-        if(DEBUG_TO_SERIAL)
-            debugPrintln(PSTR("Proper Version"));
+        if(DEBUG_PRINTING)
+        {
+            Serial.println(F("Proper Version"));
+        }
+        
         
         EEPROM_readAnything(&EEPROMAddress, password);
-        EEPROM_readAnything(&EEPROMAddress, apNetworkName);
-        EEPROM_readAnything(&EEPROMAddress, joinNetorkName);
-        EEPROM_readAnything(&EEPROMAddress, joinNetworkPassword);
         
-        if(DEBUG_TO_SERIAL)
+        if(DEBUG_PRINTING)
         {
-            debugPrint(PSTR("EEPROM Password:"));
-            debug.println(password);
-            debugPrint(PSTR("EEPROM apNetworkName:"));
-            debug.println(apNetworkName);
-            debugPrint(PSTR("EEPROM joinNetworkName:"));
-            debug.println(joinNetorkName);
-            debugPrint(PSTR("EEPROM joinNetworkPassword:"));
-            debug.println(joinNetworkPassword);
+            Serial.print(F("EEPROM Password:"));
+            Serial.println(password);
         }
     }
 }
  
 void writeEEPROMDefaults()
 {
-    if(DEBUG_TO_SERIAL)
-        debugPrintln(PSTR("Defaults"));
+    if(DEBUG_PRINTING)
+    {
+        Serial.println(F("EEPROM Defaults"));
+    }
+    
     // Defaults
     versionNumber = VERSION_NUMBER;
     password = DEFAULT_PASSWORD;
@@ -814,42 +682,7 @@ void writeEEPROMValues()
     {
         EEPROM_writeAnything(&EEPROMAddress, versionNumber);
         EEPROM_writeAnything(&EEPROMAddress, password);
-        EEPROM_writeAnything(&EEPROMAddress, apNetworkName);
-        EEPROM_writeAnything(&EEPROMAddress, joinNetorkName);
-        EEPROM_writeAnything(&EEPROMAddress, joinNetworkPassword);
     }
-}
-
-void debugPrint(PGM_P s) 
-{
-    char c;
-    while((c = pgm_read_byte(s++)) != 0)
-        debug.print(c);
-}
-
-void debugPrintln(PGM_P s) 
-{
-    char c;
-    while((c = pgm_read_byte(s++)) != 0)
-        debug.print(c);
-    
-    debug.println();
-}
-
-void wiflyPrint(PGM_P s) 
-{
-    char c;
-    while((c = pgm_read_byte(s++)) != 0)
-        wifly.print(c);
-}
-
-void wiflyPrintln(PGM_P s) 
-{
-    char c;
-    while((c = pgm_read_byte(s++)) != 0)
-        wifly.print(c);
-    
-    wifly.println();
 }
 
 void convertHexCharacters(char *commandValues, int length)
