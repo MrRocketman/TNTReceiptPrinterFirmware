@@ -82,8 +82,9 @@ __asm volatile ("nop");
 #define DEFAULT_PASSWORD "James"
 #define VERSION_NUMBER 1
 #define EEPROM_ADDRESS 0
-#define DEBUG_PRINTING // Comment out to disable
-#define EOL '\n'
+//#define DEBUG_PRINTING // Comment out to disable
+#define END_OF_COMMAND '\n'
+#define MIDDLE_OF_COMMAND '\r'
 
 // BLE Definitions
 #define BLE_RDY 2 // BLE READY (data ready interrupt from BTLE)
@@ -105,8 +106,8 @@ char *password;
 int versionNumber;
 
 // Command buffer variables
-static char commandBuffer[BUFFER_SIZE];
-static int bufferIndex = 0;
+char commandBuffer[BUFFER_SIZE];
+int bufferIndex = 0;
 
 // Bitmap printing variables
 int bitmapWidth = 0;
@@ -130,6 +131,9 @@ Adafruit_Thermal printer(PRINTER_RX_PIN, PRINTER_TX_PIN);
 // For logic
 int numberOfTabs = 0;
 int parsedP = -1;
+unsigned long cashDrawerPreviousMillis = 0;
+int cashDrawerDelay = 50;
+bool managingCashDrawer = 0;
 
 #pragma mark - Method Definitions
 
@@ -139,6 +143,8 @@ void getCommand();
 int parseCommandCode(char);
 char *parseCommandString(char code);
 void sendCommandToBLE(int dataCommand, int dataValue);
+
+void manageCashDrawer();
 
 // Debugging
 void terminal();
@@ -165,11 +171,9 @@ void setup()
     // Printer powerup and setup
     printer.begin();
     
-#ifdef DEBUG_PRINTING
     Serial.print(F("freeRam: "));
     Serial.print(freeMemory());
     Serial.println(F(" bytes"));
-#endif
 }
 
 void loop()
@@ -212,13 +216,73 @@ void loop()
     {
         // start getting commands since BLE is connected
         getCommand();
+        
+        manageCashDrawer();
     }
 }
 
 #pragma mark - Data Handling
 
+void getCommand()
+{
+#ifdef DEBUG_PRINTING
+    if (BLEserial.available())
+    {
+        Serial.print(F("* "));
+        Serial.print(BLEserial.available());
+        Serial.println(F(" bytes available from BLE"));
+    }
+#endif
+    
+    // If data is available
+    while (BLEserial.available())
+    {
+        // Receive one character from BLE
+        char c = BLEserial.read();
+        
+        // As long as character is not END_OF_COMMAND and is not exceeding buffer size limit
+        if (c != END_OF_COMMAND && c != MIDDLE_OF_COMMAND && (bufferIndex < BUFFER_SIZE))
+        {
+            // Store character in command buffer
+            commandBuffer[bufferIndex] = c;
+#ifdef DEBUG_PRINTING
+            // print received character (for debugging)
+            Serial.print(commandBuffer[bufferIndex]);
+#endif
+            // Increment command buffer index
+            bufferIndex ++;
+        }
+        else if(bufferIndex >= BUFFER_SIZE)
+        {
+            Serial.println("Buffer Overflow!!!");
+        }
+        // Now that a full command has been received
+        else if(c == END_OF_COMMAND)
+        {
+#ifdef DEBUG_PRINTING
+            Serial.print(F("\n"));
+#endif
+            processCommand();
+            //restart buffer
+            bufferIndex = 0;
+            memset(commandBuffer, '\0', BUFFER_SIZE);
+        }
+        else if(c == MIDDLE_OF_COMMAND)
+        {
+#ifdef DEBUG_PRINTING
+            Serial.print(F("\n"));
+            Serial.println(F("AOK"));
+#endif
+            // Send AOK so the host will send the rest of the command
+            BLEserial.print("AOK\n");
+        }
+    }
+}
+
 void processCommand()
 {
+    validCommandReceived = 0;
+    
     parsedP = parseCommandCode('P');
     // P00 Password authentication
     if(parsedP == 0)
@@ -273,9 +337,8 @@ void processCommand()
                 
                 digitalWrite(CASH_DRAWER_PIN, HIGH);
                 // Wait 50 ms to ensure the solenoid has been energized
-                delay(50);
-                digitalWrite(CASH_DRAWER_PIN, LOW);
-                delay(50);
+                cashDrawerPreviousMillis = millis();
+                managingCashDrawer = 1;
                 break;
             case 20: // P20 Wakeup Printer
                 validCommandReceived = 1;
@@ -479,9 +542,12 @@ void processCommand()
                 break;
         }
         
-        if (validCommandReceived)
+        if(validCommandReceived)
         {
-            //BLEserial.print("AOK\n");
+#ifdef DEBUG_PRINTING
+            Serial.println(F("AOK"));
+#endif
+            BLEserial.print("AOK\n");
         }
         else
         {
@@ -493,49 +559,6 @@ void processCommand()
         if(!authorized)
         {
             BLEserial.print("Not Authorized\n");
-        }
-    }
-}
-
-void getCommand()
-{
-#ifdef DEBUG_PRINTING
-    if (BLEserial.available())
-    {
-        Serial.print(F("* "));
-        Serial.print(BLEserial.available());
-        Serial.println(F(" bytes available from BLE"));
-    }
-#endif
-    
-    // If data is available
-    while (BLEserial.available())
-    {
-        // Receive one character from BLE
-        char c = BLEserial.read();
-        
-        // As long as character is not EOL and is not exceeding buffer size limit
-        if (c != EOL && (bufferIndex < BUFFER_SIZE))
-        {
-            // Store character in command buffer
-            commandBuffer[bufferIndex] = c;
-#ifdef DEBUG_PRINTING
-            // print received character (for debugging)
-            Serial.print(commandBuffer[bufferIndex]);
-#endif
-            // Increment command buffer index
-            bufferIndex ++;
-        }
-        // Now that a full command has been received
-        else
-        {
-#ifdef DEBUG_PRINTING
-            Serial.print(F("\n"));
-#endif
-            processCommand();
-            //restart buffer
-            bufferIndex = 0;
-            memset(commandBuffer, '\0', BUFFER_SIZE);
         }
     }
 }
@@ -668,6 +691,18 @@ void sendCommandToBLE(int dataCommand, int dataValue)
     if ((currentBLEStatus == ACI_EVT_CONNECTED))
     {
         BLEserial.print(dataToSend);
+    }
+}
+
+void manageCashDrawer()
+{
+    if(managingCashDrawer)
+    {
+        if(millis() - cashDrawerPreviousMillis >= cashDrawerDelay)
+        {
+            digitalWrite(CASH_DRAWER_PIN, LOW);
+            managingCashDrawer = 0;
+        }
     }
 }
 
