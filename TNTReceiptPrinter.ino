@@ -124,9 +124,12 @@ aci_evt_opcode_t previousBLEStatus = ACI_EVT_DISCONNECTED;
 aci_evt_opcode_t currentBLEStatus = ACI_EVT_DISCONNECTED;
 Adafruit_BLE_UART BLEserial = Adafruit_BLE_UART(BLE_REQ, BLE_RDY, BLE_RST);
 
+// Printer
 Adafruit_Thermal printer(PRINTER_RX_PIN, PRINTER_TX_PIN);
-// For printer tabs
+
+// For logic
 int numberOfTabs = 0;
+int parsedP = -1;
 
 #pragma mark - Method Definitions
 
@@ -216,6 +219,22 @@ void loop()
 
 void processCommand()
 {
+    parsedP = parseCommandCode('P');
+    // P00 Password authentication
+    if(parsedP == 0)
+    {
+        validCommandReceived = 1;
+        
+        if(strcmp(password, parseCommandString('V')) == 0)
+        {
+            authorized = 1;
+        }
+#ifdef DEBUG_PRINTING
+        Serial.print(F("Password attempt:"));
+        Serial.println(parseCommandString('V'));
+#endif
+    }
+    
     if(authorized)
     {
 #ifdef DEBUG_PRINTING
@@ -224,7 +243,7 @@ void processCommand()
 #endif
         
         // Determine which command was received
-        switch(parseCommandCode('P'))
+        switch(parsedP)
         {
             case 0: // P00 Password authentication
                 validCommandReceived = 1;
@@ -462,7 +481,7 @@ void processCommand()
         
         if (validCommandReceived)
         {
-            BLEserial.print("AOK\n");
+            //BLEserial.print("AOK\n");
         }
         else
         {
@@ -485,7 +504,7 @@ void getCommand()
     {
         Serial.print(F("* "));
         Serial.print(BLEserial.available());
-        Serial.println(F(" bytes available from BTLE"));
+        Serial.println(F(" bytes available from BLE"));
     }
 #endif
     
@@ -516,7 +535,7 @@ void getCommand()
             processCommand();
             //restart buffer
             bufferIndex = 0;
-            memset(commandBuffer, '\0', bufferIndex);
+            memset(commandBuffer, '\0', BUFFER_SIZE);
         }
     }
 }
@@ -548,7 +567,7 @@ char *parseCommandString(char code)
     {
         if(*ptr == code)
         {
-            return ptr;
+            return (ptr + 1);
         }
         
         ptr = strchr(ptr, ' ') + 1;
