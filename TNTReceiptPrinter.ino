@@ -20,6 +20,13 @@
  * End Connection Command
  */
 
+
+// BOF preprocessor bug prevent - insert me on top of your arduino-code
+// From: http://www.a-control.de/arduino-fehler/?lang=en
+#if 1
+__asm volatile ("nop");
+#endif
+
 #pragma mark - Communication Protocol Definition
 
 /* Codes: P = Print V = Value
@@ -113,12 +120,13 @@ char hexString[2];
 // Variables for BTLE Communication
 bool authorized = 0;
 bool validCommandReceived = 0;
-bool firstTime = 1;
 aci_evt_opcode_t previousBLEStatus = ACI_EVT_DISCONNECTED;
 aci_evt_opcode_t currentBLEStatus = ACI_EVT_DISCONNECTED;
 Adafruit_BLE_UART BLEserial = Adafruit_BLE_UART(BLE_REQ, BLE_RDY, BLE_RST);
 
-Adafruit_Thermal printer(printerRXPin, printerTXPin);
+Adafruit_Thermal printer(PRINTER_RX_PIN, PRINTER_TX_PIN);
+// For printer tabs
+int numberOfTabs = 0;
 
 #pragma mark - Method Definitions
 
@@ -126,7 +134,7 @@ Adafruit_Thermal printer(printerRXPin, printerTXPin);
 void processCommand();
 void getCommand();
 int parseCommandCode(char);
-char *parseCommandString(char code)
+char *parseCommandString(char code);
 void sendCommandToBLE(int dataCommand, int dataValue);
 
 // Debugging
@@ -143,8 +151,7 @@ void writeEEPROMValues();
 void setup()
 {
     // Cash Drawer
-    pinMode(cashDrawerPin, OUTPUT);
-    digitalWrite(statusPin, LOW);
+    pinMode(CASH_DRAWER_PIN, OUTPUT);
     
     // Serial setup
     Serial.begin(9600);
@@ -192,14 +199,13 @@ void loop()
         if((currentBLEStatus == ACI_EVT_DEVICE_STARTED || currentBLEStatus == ACI_EVT_DISCONNECTED) && previousBLEStatus == ACI_EVT_CONNECTED)
         {
             authorized = 0;
-            firstTime = 1;
         }
         
         previousBLEStatus = currentBLEStatus;
     }
     
     // BLE connected, get commands if any
-    if (currentBTLEStatus == ACI_EVT_CONNECTED)
+    if (currentBLEStatus == ACI_EVT_CONNECTED)
     {
         // start getting commands since BLE is connected
         getCommand();
@@ -208,13 +214,13 @@ void loop()
 
 #pragma mark - Data Handling
 
-void processCommands()
+void processCommand()
 {
     if(authorized)
     {
 #ifdef DEBUG_PRINTING
-        Serial.print(F("cmdBuffer:"));
-        Serial.println(cmdBuffer);
+        Serial.print(F("commandBuffer:"));
+        Serial.println(commandBuffer);
 #endif
         
         // Determine which command was received
@@ -223,14 +229,13 @@ void processCommands()
             case 0: // P00 Password authentication
                 validCommandReceived = 1;
                 
-                char *passwordAttempt = parseCommandString('V');
-                if(strcmp(password, passwordAttempt) == 0)
+                if(strcmp(password, parseCommandString('V')) == 0)
                 {
                     authorized = 1;
                 }
 #ifdef DEBUG_PRINTING
                 Serial.print(F("Password attempt:"));
-                Serial.println(passwordAttempt);
+                Serial.println(parseCommandString('V'));
 #endif
                 break;
             case 1: // P01 VNewPassword - Change the password
@@ -247,10 +252,10 @@ void processCommands()
                 Serial.println(password);
 #endif
                 
-                digitalWrite(cashDrawerPin, HIGH);
+                digitalWrite(CASH_DRAWER_PIN, HIGH);
                 // Wait 50 ms to ensure the solenoid has been energized
                 delay(50);
-                digitalWrite(cashDrawerPin, LOW);
+                digitalWrite(CASH_DRAWER_PIN, LOW);
                 delay(50);
                 break;
             case 20: // P20 Wakeup Printer
@@ -292,14 +297,12 @@ void processCommands()
             case 30: // P30 Print text
                 validCommandReceived = 1;
                 
-                char *textToPrint = parseCommandString('V');
-                
 #ifdef DEBUG_PRINTING
                 Serial.print(F("Printing text:"));
-                Serial.println(textToPrint);
+                Serial.println(parseCommandString('V'));
 #endif
                 
-                printer.print(textToPrint);
+                printer.print(parseCommandString('V'));
                 break;
             case 31: // P31 - Print default bitmap
                 validCommandReceived = 1;
@@ -339,7 +342,7 @@ void processCommands()
                 if(parseCommandCode('V') == 0)
                 {
                     validCommandReceived = 1;
-                    printer.doubleHeightOff()();
+                    printer.doubleHeightOff();
                 }
                 else if(parseCommandCode('V') == 1)
                 {
@@ -445,10 +448,12 @@ void processCommands()
             case 54: // P54 V1 - Add Tabs (Values codes represent the number of tabs to add)
                 validCommandReceived = 1;
                 
-                int numberOfTabs = parseCommandCode('V');
+                numberOfTabs = parseCommandCode('V');
                 
                 for(; numberOfTabs > 0; numberOfTabs --)
+                {
                     printer.tab();
+                }
                 break;
             default:
                 validCommandReceived = 0;
@@ -466,23 +471,9 @@ void processCommands()
     }
     else
     {
-        if (firstTime)
+        if(!authorized)
         {
-            if (parseNumber('P') == 123)
-            {
-                authorized = 1;
-                firstTime = 0;
-                BLEserial.print("Authorized\n");
-            }
-            else
-            {
-                authorized = 0;
-            }
-        }
-        
-        if(!iOSVerified)
-        {
-            BTLEserial.print("Not Authorized\n");
+            BLEserial.print("Not Authorized\n");
         }
     }
 }
@@ -493,7 +484,7 @@ void getCommand()
     if (BLEserial.available())
     {
         Serial.print(F("* "));
-        Serial.print(BTLEserial.available());
+        Serial.print(BLEserial.available());
         Serial.println(F(" bytes available from BTLE"));
     }
 #endif
@@ -650,14 +641,14 @@ void sendCommandToBLE(int dataCommand, int dataValue)
     Serial.println(dataToSend);
     
     //tell BTLE to go to work (needs to happen frequently)
-    BTLEserial.pollACI();
+    BLEserial.pollACI();
     //get current status of BTLE
-    currentBTLEStatus = BTLEserial.getState();
+    currentBLEStatus = BLEserial.getState();
     
     //BTLE connected
-    if ((currentBTLEStatus == ACI_EVT_CONNECTED))
+    if ((currentBLEStatus == ACI_EVT_CONNECTED))
     {
-        BTLEserial.print(dataToSend);
+        BLEserial.print(dataToSend);
     }
 }
 
@@ -684,11 +675,10 @@ void readEEPROMValues()
     EEPROMAddress = EEPROM_ADDRESS;
     EEPROM_readAnything(&EEPROMAddress, versionNumber);
     
-    if(DEBUG_PRINTING)
-    {
-        Serial.print(F("EEPROM versionNumber:"));
-        Serial.println(versionNumber);
-    }
+#ifdef DEBUG_PRINTING
+    Serial.print(F("EEPROM versionNumber:"));
+    Serial.println(versionNumber);
+#endif
     
     // First powerup. Write defaults to EEPROM
     if(versionNumber == -1 || versionNumber > VERSION_NUMBER)
@@ -699,33 +689,25 @@ void readEEPROMValues()
     // Version 1.0 Values/Order
     if(versionNumber <= 1)
     {
-        if(DEBUG_PRINTING)
-        {
-            Serial.println(F("Proper Version"));
-        }
-        
-        
         EEPROM_readAnything(&EEPROMAddress, password);
         
-        if(DEBUG_PRINTING)
-        {
-            Serial.print(F("EEPROM Password:"));
-            Serial.println(password);
-        }
+#ifdef DEBUG_PRINTING
+        Serial.println(F("Proper Version"));
+        Serial.print(F("EEPROM Password:"));
+        Serial.println(password);
+#endif
     }
 }
  
 void writeEEPROMDefaults()
 {
-    if(DEBUG_PRINTING)
-    {
-        Serial.println(F("EEPROM Defaults"));
-    }
+#ifdef DEBUG_PRINTING
+    Serial.println(F("EEPROM Defaults"));
+#endif
     
     // Defaults
     versionNumber = VERSION_NUMBER;
     password = DEFAULT_PASSWORD;
-    apNetworkName = DEFAULT_AP_NETWORK_NAME;
     writeEEPROMValues();
     
     // Read the new version Number
